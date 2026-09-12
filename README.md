@@ -23,7 +23,7 @@ there.
 ## Install
 
 ```bash
-omarchy plugin add https://github.com/<you>/omarchy-world-radio --enable --yes
+omarchy plugin add https://github.com/kaibur02/omarchy-world-radio --enable --yes
 ```
 
 The widget lands in the bar's `center` section. To place it right after
