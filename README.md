@@ -4,6 +4,8 @@ A spinning world globe for the Omarchy bar. Click for a big globe of
 every country — hovering a country, city, or town plays live radio from
 there.
 
+![World Radio globe popup](preview.png)
+
 ## Install
 
 ```sh
