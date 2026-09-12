@@ -1,0 +1,25 @@
+{
+  "schemaVersion": 1,
+  "id": "world-radio",
+  "name": "World Radio",
+  "version": "1.0.0",
+  "author": "kaibur",
+  "description": "Spinning world globe in the bar. Click for a big globe of every country; hover a country, city or town to play its live radio.",
+  "kinds": [
+    "bar-widget"
+  ],
+  "entryPoints": {
+    "barWidget": "Widget.qml"
+  },
+  "barWidget": {
+    "displayName": "World Radio",
+    "description": "Globe icon next to Weather. Click opens a big world globe; hovering countries/cities/towns plays live radio from there.",
+    "category": "Media",
+    "allowMultiple": false,
+    "defaultSection": "center",
+    "defaults": {
+      "hoverPlay": true,
+      "volume": 0.8
+    }
+  }
+}
