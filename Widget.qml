@@ -16,8 +16,8 @@ import "Model.js" as Model
 // Color/Style singletons, so theme switches restyle the whole plugin live.
 Panel {
   id: root
-  moduleName: "world-radio"
-  ipcTarget: "world-radio"
+  moduleName: "io.github.kaibur02.omarchy-world-radio"
+  ipcTarget: "io.github.kaibur02.omarchy-world-radio"
   manageIpc: false
 
   // ------------------------------- state -------------------------------

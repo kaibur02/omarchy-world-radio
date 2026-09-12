@@ -1,9 +1,10 @@
 {
   "schemaVersion": 1,
-  "id": "world-radio",
+  "id": "io.github.kaibur02.omarchy-world-radio",
   "name": "World Radio",
   "version": "1.0.0",
-  "author": "kaibur",
+  "author": "kaibur02",
+  "license": "MIT",
   "description": "Spinning world globe in the bar. Click for a big globe of every country; hover a country, city or town to play its live radio.",
   "kinds": [
     "bar-widget"

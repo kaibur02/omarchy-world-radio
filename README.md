@@ -1,62 +1,65 @@
-# World Radio for Omarchy
+# World Radio
 
-A spinning world globe in the Omarchy top bar. Click for a big globe of
+A spinning world globe for the Omarchy bar. Click for a big globe of
 every country — hovering a country, city, or town plays live radio from
 there.
 
-## Features
-
-- **Bar widget** — globe glyph next to Weather; lights up while playing.
-  Left-click opens the globe, right-click stops, middle-click opens
-  [radio.garden](https://radio.garden).
-- **Big globe popup** — orthographic spinning globe with all ~250
-  countries from [radio-browser.info](https://www.radio-browser.info) as
-  dots sized by station count. Drag to spin by hand.
-- **Hover-to-play** — hovering a globe dot, country row, or station row
-  tunes in live radio (toggleable; when off, playback is click-only).
-- Searchable country list, per-country live station list
-  (city/state, codec, bitrate, language), volume + mute, now-playing
-  footer.
-- Fully theme-reactive: every color comes from Omarchy's `Color`/`Style`
-  singletons, so theme switches restyle the plugin live.
-
 ## Install
 
-```bash
-omarchy plugin add https://github.com/kaibur02/omarchy-world-radio --enable --yes
+```sh
+omarchy plugin add https://github.com/kaibur02/omarchy-world-radio.git --enable
 ```
 
-The widget lands in the bar's `center` section. To place it right after
-Weather:
+## Usage
 
-```bash
-omarchy bar move world-radio --after omarchy.weather
+Click the globe icon in the bar to open or close the world globe.
+Press Escape to close it.
+
+- Hover a globe dot, country row, or station row to tune in live radio
+  from there (toggleable via the `hover ▶` button; when off, playback
+  is click-only).
+- Drag the globe to spin it by hand.
+- Right-click the bar icon to stop playback, middle-click to open
+  radio.garden in a browser.
+- `/` focuses country search, `Space` toggles play/stop.
+
+## Configure
+
+```sh
+omarchy bar move io.github.kaibur02.omarchy-world-radio --after omarchy.weather
+omarchy bar set io.github.kaibur02.omarchy-world-radio hoverPlay false
 ```
 
-## Requirements
+## Remove
 
-- Omarchy with the Quickshell shell (`omarchy-shell`)
-- Internet access (station directory + streams via radio-browser.info)
+```sh
+omarchy plugin remove io.github.kaibur02.omarchy-world-radio
+```
+
+## Details
+
+- Station directory and streams via
+  [radio-browser.info](https://www.radio-browser.info) (no API key needed).
+- Fully theme-reactive: every color comes from Omarchy's `Color`/`Style`
+  singletons, so theme switches restyle the plugin live.
+- No install hooks, no sudo, no background services. Runs entirely
+  inside `omarchy-shell` as an unsandboxed QML plugin with standard user
+  permissions.
 
 ## Files
 
-| File          | What                         |
-|---------------|------------------------------|
-| `manifest.json` | Omarchy plugin manifest    |
-| `Widget.qml`  | Bar widget + globe popup     |
-| `Globe.qml`   | Canvas orthographic globe    |
-| `Model.js`    | Country coordinates + API helpers |
+| File            | What                          |
+|-----------------|-------------------------------|
+| `manifest.json` | Omarchy plugin manifest       |
+| `Widget.qml`    | Bar widget + globe popup      |
+| `Globe.qml`     | Canvas orthographic globe     |
+| `Model.js`      | Country coordinates + API helpers |
+| `preview.png`   | Marketplace preview screenshot |
 
 ## IPC
 
-The widget exposes the `world-radio` IPC target:
-
-```bash
-omarchy-shell world-radio toggle   # open/close the globe
-omarchy-shell world-radio stop     # stop playback
-omarchy-shell world-radio status   # JSON: hoverPlay, playing, selection…
+```sh
+omarchy-shell io.github.kaibur02.omarchy-world-radio toggle   # open/close the globe
+omarchy-shell io.github.kaibur02.omarchy-world-radio stop     # stop playback
+omarchy-shell io.github.kaibur02.omarchy-world-radio status   # JSON state
 ```
-
-## License
-
-MIT — see [LICENSE](LICENSE).
