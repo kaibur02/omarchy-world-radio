@@ -2,6 +2,7 @@ import QtQuick
 import QtQuick.Controls
 import Quickshell
 import Quickshell.Io
+import Quickshell.Services.Pipewire
 import QtMultimedia
 import qs.Commons
 import qs.Ui
@@ -120,10 +121,42 @@ Panel {
   }
 
   // ------------------------------- audio -------------------------------
+  // Qt's PipeWire backend pins node.target to whichever node was the
+  // default when the AudioOutput was created (shell startup), so a stream
+  // never follows later default-device changes on its own. Resolve the
+  // device from Quickshell's live default-sink node (same source the
+  // omarchy audio panel uses) and restart the stream on change so the
+  // radio follows the system default like browser tabs do.
+  MediaDevices { id: mediaDevices }
+
+  readonly property var pwDefaultSink: Pipewire.defaultAudioSink
+
+  function resolveDefaultDevice() {
+    var ds = pwDefaultSink;
+    if (!ds || !ds.description) return null;
+    var outs = mediaDevices.audioOutputs;
+    for (var i = 0; i < outs.length; i++) {
+      if (String(outs[i].description || "") === String(ds.description || ""))
+        return outs[i];
+    }
+    return null;
+  }
+
+  onPwDefaultSinkChanged: {
+    // Restart a live stream so the new device takes effect.
+    if (!(root.playing || root.buffering) || root.currentUrl === "") return;
+    var url = root.currentUrl;
+    player.stop();
+    player.source = "";
+    player.source = url;
+    player.play();
+  }
+
   MediaPlayer {
     id: player
     audioOutput: AudioOutput {
       id: audioOut
+      device: root.resolveDefaultDevice()
       volume: root.muted ? 0 : root.volume
     }
     onPlaybackStateChanged: {
