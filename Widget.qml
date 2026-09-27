@@ -2,6 +2,7 @@ import QtQuick
 import QtQuick.Controls
 import Quickshell
 import Quickshell.Io
+import Quickshell.Services.Pipewire
 import QtMultimedia
 import qs.Commons
 import qs.Ui
@@ -120,10 +121,74 @@ Panel {
   }
 
   // ------------------------------- audio -------------------------------
+  // Qt's PipeWire backend resolves the "default" output once, when the
+  // AudioOutput opens its stream, and pins node.target to that node — so a
+  // live stream never follows later default-device changes on its own. Read
+  // the live default sink from Quickshell (Pipewire.defaultAudioSink, the
+  // same source the omarchy audio panel uses), bind AudioOutput.device to
+  // it, and re-open the stream when it changes so the radio follows the
+  // system default like every other app.
+  MediaDevices { id: mediaDevices }
+
+  readonly property var pwDefaultSink: Pipewire.defaultAudioSink
+
+  readonly property var defaultOutDevice: {
+    var ds = pwDefaultSink;
+    if (!ds) return null;
+    var outs = mediaDevices.audioOutputs;
+    var i;
+    // Match the PipeWire node name first: it is unique, where the friendly
+    // description is not (identical devices, and DSP filter nodes that
+    // PipeWire also lists as outputs, can share one).
+    var wantName = String(ds.name || "");
+    if (wantName !== "")
+      for (i = 0; i < outs.length; i++)
+        if (String(outs[i].id || "") === wantName) return outs[i];
+    var wantDesc = String(ds.description || "");
+    if (wantDesc !== "")
+      for (i = 0; i < outs.length; i++)
+        if (String(outs[i].description || "") === wantDesc) return outs[i];
+    // Unknown device: fall back to letting Qt pick, which is the behaviour
+    // from before this fix rather than a broken one.
+    return null;
+  }
+
+  // Stable identity of the resolved device, so a retarget only fires when the
+  // device really changes and not on every audioOutputs refresh.
+  readonly property string defaultOutKey: {
+    var d = root.defaultOutDevice;
+    return d ? (String(d.id || "") + "|" + String(d.description || "")) : "";
+  }
+
+  // Re-open a live stream so a new default device takes effect. Debounced
+  // because a device change (a Bluetooth speaker connecting, say) updates the
+  // default sink and the output list a beat apart, and both of those land
+  // here — one restart per change, after everything has settled.
+  Timer {
+    id: retargetTimer
+    interval: 350
+    onTriggered: {
+      if (!(root.playing || root.buffering) || root.currentUrl === "") return;
+      var url = root.currentUrl;
+      player.stop();
+      player.source = "";
+      player.source = url;
+      player.play();
+    }
+  }
+  onPwDefaultSinkChanged: retargetTimer.restart()
+  onDefaultOutKeyChanged: retargetTimer.restart()
+
   MediaPlayer {
     id: player
     audioOutput: AudioOutput {
       id: audioOut
+      // Never assign null here: before Pipewire is ready there is no resolved
+      // device yet, and handing QAudioDevice a null logs a warning on every
+      // shell start. MediaDevices' own default is a valid stand-in until then.
+      device: root.defaultOutDevice !== null
+        ? root.defaultOutDevice
+        : mediaDevices.defaultAudioOutput
       volume: root.muted ? 0 : root.volume
     }
     onPlaybackStateChanged: {
