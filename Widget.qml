@@ -37,6 +37,11 @@ Panel {
   property bool loadingCountries: false
   property bool loadingStations: false
   property string searchText: ""
+  // Global name-search results while a search is live.
+  property var searchStations: []
+  property bool loadingSearch: false
+  // Last query actually sent to the API, so stale responses can be dropped.
+  property string searchQuery: ""
   property bool hoverPlay: setting("hoverPlay", true) === true || String(setting("hoverPlay", true)) === "true"
   property real volume: {
     var v = Number(setting("volume", 0.8));
@@ -46,6 +51,24 @@ Panel {
   property string pendingIso: ""
   property var pendingStation: null
   property bool _persistGuard: false
+
+  // The user's explicit choice: a country, plus the station they picked in
+  // it. Only clicks and Enter write these — hover previews never do. This is
+  // the anchor the list returns to when the search filter is cleared, so
+  // emptying the filter can no longer leave the selection on whatever the
+  // mouse happened to be over.
+  property string committedIso: ""
+  property string committedName: ""
+  property var committedStation: null
+  // Scroll the committed row into view once its list lands.
+  property bool revealPending: false
+
+  // Filter, preview and selection are three different things. While a search
+  // filter is active the lists rebuild on every keystroke, so rows slide
+  // under a still cursor and Qt re-fires containsMouse on them; acting on
+  // those synthetic hovers is what moved the selection by itself. During a
+  // live search hover only highlights — committing is click-only.
+  readonly property bool hoverCommits: hoverPlay && !searching
 
   readonly property color fg: bar ? bar.foreground : Color.foreground
   readonly property string fontFamily: bar ? bar.fontFamily : Style.font.family
@@ -63,14 +86,50 @@ Panel {
   }
   readonly property var filteredCountries: {
     var q = searchText.trim().toLowerCase();
+    if (q === "") return countries;
+    // Name/ISO matches keep their total station count. Countries of
+    // matching stations join them with matched-station counts, so the
+    // country list tracks the worldwide results dynamically.
     var out = [];
+    var seen = {};
     for (var i = 0; i < countries.length; i++) {
       var c = countries[i];
-      if (q !== "" && String(Model.prettyCountry(c.name)).toLowerCase().indexOf(q) < 0
+      if (String(Model.prettyCountry(c.name)).toLowerCase().indexOf(q) < 0
           && String(c.iso).toLowerCase().indexOf(q) < 0) continue;
-      out.push(c);
+      out.push({ name: c.name, iso: c.iso, count: c.count });
+      seen[c.iso] = true;
     }
+    var counts = {};
+    for (var j = 0; j < searchStations.length; j++) {
+      var iso = String(searchStations[j].countrycode || "").toUpperCase();
+      if (iso !== "") counts[iso] = (counts[iso] || 0) + 1;
+    }
+    for (var k = 0; k < countries.length; k++) {
+      var cc = countries[k];
+      if (seen[cc.iso] || !counts[cc.iso]) continue;
+      seen[cc.iso] = true;
+      out.push({ name: cc.name, iso: cc.iso, count: counts[cc.iso] });
+    }
+    for (var m = 0; m < out.length; m++) {
+      if (counts[out[m].iso] > 0) out[m].count = counts[out[m].iso];
+    }
+    out.sort(function (a, b) { return b.count - a.count; });
     return out;
+  }
+  readonly property bool searching: searchText.trim() !== ""
+  readonly property var displayStations: searching ? searchStations : stations
+
+  // The picked station, when it is not part of the list on screen. Search
+  // ranks worldwide by name relevance while a country list ranks by clicks
+  // and cuts at 30, so a pick is often absent from its own country's top
+  // list — it gets a pinned row above the list, so the choice is always
+  // visible and clearing a filter always has something to land on.
+  readonly property var pinnedStation: {
+    if (!committedStation) return null;
+    var list = displayStations;
+    for (var i = 0; i < list.length; i++)
+      if (list[i].uuid === committedStation.uuid) return null;
+    return committedStation;
   }
   readonly property string playingIso: currentStation ? String(currentStation.countrycode || "") : ""
   readonly property string nowPlayingText: currentStation
@@ -234,6 +293,34 @@ Panel {
     player.play();
   }
 
+  // Clicking a station row plays it and remembers the pick: the country it
+  // came from is what a later filter clear returns to. A pick from worldwide
+  // search results also marks its country — highlighted in the country list
+  // and on the globe — while the search and its results stay on screen.
+  function playStationFromList(st) {
+    playStation(st);
+    if (!st) return;
+    var iso = String(st.countrycode || "").toUpperCase();
+    var name = String(st.country || "");
+    if (iso === "") {
+      for (var i = 0; i < countries.length; i++) {
+        if (String(countries[i].name || "").toLowerCase()
+            === name.toLowerCase()) {
+          iso = countries[i].iso;
+          name = countries[i].name;
+          break;
+        }
+      }
+    }
+    if (iso !== "") {
+      committedStation = st;
+      committedIso = iso;
+      committedName = name;
+    }
+    if (!root.searching || iso === "") return;
+    root.selectCountry(iso, name, false);
+  }
+
   function stopPlayback() {
     hoverTimer.stop();
     root.pendingStation = null;
@@ -248,15 +335,16 @@ Panel {
   }
 
   function onStreamFailed(msg) {
-    // Advance to the next station in the current list so a dead stream
-    // never leaves silence behind.
+    // Advance to the next station in the current list (search results
+    // included) so a dead stream never leaves silence behind.
+    var list = root.displayStations;
     var idx = -1;
-    for (var i = 0; i < stations.length; i++) {
-      if (currentStation && stations[i].uuid === currentStation.uuid) { idx = i; break; }
+    for (var i = 0; i < list.length; i++) {
+      if (currentStation && list[i].uuid === currentStation.uuid) { idx = i; break; }
     }
-    if (idx >= 0 && idx + 1 < stations.length) {
+    if (idx >= 0 && idx + 1 < list.length) {
       root.errorText = msg;
-      playStation(stations[idx + 1]);
+      playStation(list[idx + 1]);
     } else {
       root.playing = false;
       root.buffering = false;
@@ -343,6 +431,73 @@ Panel {
     fetchStations(iso, name, autoplay, false);
   }
 
+  // An explicit country choice — a click on a row or on a globe point, or
+  // Enter on a filtered country. This, and not whatever the pointer later
+  // drifts across, is what the panel goes back to when a filter clears.
+  function commitCountry(iso, name) {
+    committedIso = iso;
+    committedName = name;
+    committedStation = null;
+    // A country pick has no station row to reveal.
+    revealPending = false;
+  }
+
+  // A keystroke invalidates any hover preview still sitting on its debounce:
+  // the row that armed it may not even be on screen any more.
+  function cancelPendingHover() {
+    hoverTimer.stop();
+    pendingIso = "";
+    pendingStation = null;
+  }
+
+  // Clearing the filter is a view operation, not a selection one: it puts
+  // the user back on the country they chose their station from.
+  function restoreCommittedContext() {
+    if (committedIso === "") return;
+    revealPending = true;
+    if (selectedIso === committedIso && stations.length > 0) {
+      Qt.callLater(root.revealCommittedStation);
+      return;
+    }
+    selectedIso = committedIso;
+    selectedName = committedName;
+    if (stationCache[committedIso]) {
+      stations = stationCache[committedIso];
+      Qt.callLater(root.revealCommittedStation);
+    } else {
+      // No autoplay: clearing a filter must not restart audio.
+      fetchStations(committedIso, committedName, false, false);
+    }
+  }
+
+  // Bring the chosen station back into view in the restored list — the same
+  // thing a file manager does with the selection after a filter is cleared.
+  function revealCommittedStation() {
+    if (!revealPending || !committedStation || !stationFlick) return;
+    // One attempt per restore. If the pick is not in this list it is shown
+    // as the pinned row instead, so there is nothing to scroll to and no
+    // reason to keep waiting on a later list change.
+    revealPending = false;
+    var list = displayStations;
+    var idx = -1;
+    for (var i = 0; i < list.length; i++) {
+      if (list[i].uuid === committedStation.uuid) { idx = i; break; }
+    }
+    if (idx < 0) return;
+    var rowH = Style.space(40);
+    var view = stationFlick.height - Style.space(8);
+    var top = idx * rowH;
+    if (top < stationFlick.contentY
+        || top + rowH > stationFlick.contentY + view) {
+      var maxY = Math.max(0, stationFlick.contentHeight - view);
+      stationFlick.contentY = Math.max(0, Math.min(top - rowH, maxY));
+    }
+  }
+
+  // A fetch that was already in flight when the filter cleared still owes us
+  // the scroll once it lands.
+  onStationsChanged: Qt.callLater(root.revealCommittedStation)
+
   // isHover marks hover-armed fetches: their play-on-arrival is honored
   // only while hover-play is still on. Clicks pass false and always play.
   function fetchStations(iso, name, autoplay, isHover) {
@@ -386,6 +541,81 @@ Panel {
     } catch (e) {
       root.loadingStations = false;
     }
+  }
+
+  // Global station search: typing a station name (or part of one) queries
+  // the whole radio-browser directory, so any station is reachable without
+  // knowing its country first. Typing is debounced and Enter plays the top
+  // result.
+  function commitSearch(playTop) {
+    var q = searchText.trim();
+    if (q === "") {
+      searchTimer.stop();
+      searchQuery = "";
+      searchStations = [];
+      loadingSearch = false;
+      // An empty filter restores the full station list, but lands on the
+      // user's committed pick — not on whatever row the pointer drifted
+      // across while deleting.
+      restoreCommittedContext();
+      return;
+    }
+    if (q.length < 2) {
+      // One character is too broad for a worldwide query.
+      searchQuery = q;
+      searchStations = [];
+      loadingSearch = false;
+      return;
+    }
+    if (q === searchQuery && searchStations.length > 0) {
+      if (playTop) playStationFromList(searchStations[0]);
+      return;
+    }
+    searchTimer.stop();
+    fetchStationSearch(q, playTop);
+  }
+
+  function fetchStationSearch(q, playTop) {
+    loadingSearch = true;
+    searchQuery = q;
+    var xhr = new XMLHttpRequest();
+    var base = apiBase();
+    xhr.onreadystatechange = function () {
+      if (xhr.readyState !== XMLHttpRequest.DONE) return;
+      // Ignore a response that a newer keystroke already superseded.
+      if (q !== String(root.searchText || "").trim()) return;
+      if (xhr.status === 200) {
+        try {
+          var arr = JSON.parse(xhr.responseText);
+          var out = [];
+          for (var i = 0; i < arr.length; i++) {
+            var st = Model.cleanStation(arr[i]);
+            if (st.url !== "") out.push(st);
+          }
+          root.searchStations = out;
+          // Enter on a search is an explicit pick, so it commits like a click.
+          if (playTop && out.length > 0) root.playStationFromList(out[0]);
+        } catch (e) {}
+        root.loadingSearch = false;
+      } else {
+        rotateMirror();
+        if (mirrorIndex === 0) root.loadingSearch = false;
+        else root.fetchStationSearch(q, playTop);
+      }
+    };
+    try {
+      xhr.open("GET", Model.stationsSearchUrl(base, q, 100));
+      xhr.send();
+    } catch (e) {
+      root.loadingSearch = false;
+    }
+  }
+
+  Timer {
+    id: searchTimer
+    interval: 320
+    repeat: false
+    onTriggered: root.commitSearch(false)
   }
 
   // Hover-to-play debounce: hovering is chatty, playback must not be.
@@ -595,19 +825,33 @@ Panel {
             TextField {
               id: searchField
               width: parent.width - countLabel.width - parent.spacing
-              placeholderText: "Search " + (countries.length > 0 ? countries.length : "…") + " countries…  ( / )"
+              placeholderText: "Search countries + stations…  ( / )"
               text: root.searchText
               font.family: root.fontFamily
-              onTextChanged: root.searchText = text
+              onTextChanged: {
+                root.searchText = text;
+                root.cancelPendingHover();
+                if (text.trim() === "") root.commitSearch(false);
+                else searchTimer.restart();
+              }
               onAccepted: {
-                if (filteredCountries.length > 0)
-                  root.selectCountry(filteredCountries[0].iso, filteredCountries[0].name, true);
+                if (root.searching) root.commitSearch(true);
+                else if (filteredCountries.length > 0) {
+                  root.commitCountry(filteredCountries[0].iso,
+                                     filteredCountries[0].name);
+                  root.selectCountry(filteredCountries[0].iso,
+                                     filteredCountries[0].name, true);
+                }
               }
             }
             Text {
               id: countLabel
               anchors.verticalCenter: parent.verticalCenter
-              text: filteredCountries.length + " found"
+              text: root.searching
+                ? (root.loadingSearch
+                   ? "searching…"
+                   : (root.searchStations.length + " stations"))
+                : (filteredCountries.length + " found")
               color: Util.alpha(root.fg, 0.6)
               font.family: root.fontFamily
               font.pixelSize: Style.font.caption
@@ -636,8 +880,14 @@ Panel {
                 points: root.globePoints
                 selectedIso: root.selectedIso
                 playingIso: root.playingIso
-                onPointHovered: function (p) { if (root.hoverPlay) root.previewCountry(p.iso, p.name); }
-                onPointSelected: function (p) { root.selectCountry(p.iso, p.name, true); }
+                onPointHovered: function (p) {
+                  if (root.hoverCommits) root.previewCountry(p.iso, p.name);
+                }
+                onPointSelected: function (p) {
+                  root.commitCountry(p.iso, p.name);
+                  root.searchText = "";
+                  root.selectCountry(p.iso, p.name, true);
+                }
               }
             }
 
@@ -753,11 +1003,18 @@ Panel {
                           hoverEnabled: true
                           cursorShape: Qt.PointingHandCursor
                           onContainsMouseChanged: {
-                            // Hover mode off: hover only highlights, selection
-                            // and playback are click-only.
-                            if (containsMouse && root.hoverPlay) root.previewCountry(modelData.iso, modelData.name);
+                            // Hover mode off — or a search is live and these
+                            // rows are re-sorting under the cursor: hovering
+                            // only highlights; selecting and playing stay
+                            // click-only.
+                            if (containsMouse && root.hoverCommits)
+                              root.previewCountry(modelData.iso, modelData.name);
                           }
-                          onClicked: root.selectCountry(modelData.iso, modelData.name, true)
+                          onClicked: {
+                            root.commitCountry(modelData.iso, modelData.name);
+                            root.searchText = "";
+                            root.selectCountry(modelData.iso, modelData.name, true);
+                          }
                         }
                       }
                     }
@@ -766,7 +1023,9 @@ Panel {
               }
 
               PanelSectionHeader {
-                text: (root.selectedName !== "" ? Model.prettyCountry(root.selectedName).toUpperCase() + " · " : "") + "LIVE STATIONS"
+                text: root.searching
+                  ? "SEARCH RESULTS · WORLDWIDE"
+                  : ((root.selectedName !== "" ? Model.prettyCountry(root.selectedName).toUpperCase() + " · " : "") + "LIVE STATIONS")
                 foreground: root.fg
                 fontFamily: root.fontFamily
               }
@@ -780,7 +1039,7 @@ Panel {
                 clip: true
 
                 Text {
-                  visible: root.loadingStations
+                  visible: root.loadingStations && !root.searching
                   anchors.centerIn: parent
                   text: "Tuning " + Model.prettyCountry(root.selectedName) + "…"
                   color: Util.alpha(root.fg, 0.6)
@@ -789,7 +1048,25 @@ Panel {
                   font.italic: true
                 }
                 Text {
-                  visible: !root.loadingStations && root.stations.length === 0
+                  visible: root.searching && root.loadingSearch
+                  anchors.centerIn: parent
+                  text: "Searching the world…"
+                  color: Util.alpha(root.fg, 0.6)
+                  font.family: root.fontFamily
+                  font.pixelSize: Style.font.bodySmall
+                  font.italic: true
+                }
+                Text {
+                  visible: root.searching && !root.loadingSearch
+                    && root.searchStations.length === 0 && root.searchText.trim().length >= 2
+                  anchors.centerIn: parent
+                  text: "No stations match \"" + root.searchText.trim() + "\""
+                  color: Util.alpha(root.fg, 0.5)
+                  font.family: root.fontFamily
+                  font.pixelSize: Style.font.bodySmall
+                }
+                Text {
+                  visible: !root.searching && !root.loadingStations && root.stations.length === 0
                   anchors.centerIn: parent
                   text: "Hover a country to list its stations"
                   color: Util.alpha(root.fg, 0.5)
@@ -797,8 +1074,91 @@ Panel {
                   font.pixelSize: Style.font.bodySmall
                 }
 
+                // Pinned pick: parked above the scroll area so it stays put
+                // while the list moves, the way a now-playing row does.
+                Rectangle {
+                  id: pinRow
+                  visible: root.pinnedStation !== null
+                  anchors.left: parent.left
+                  anchors.right: parent.right
+                  anchors.top: parent.top
+                  anchors.margins: Style.space(4)
+                  height: Style.space(40)
+                  radius: Style.cornerRadius
+                  color: Style.selectedFillFor(root.fg, Color.accent)
+
+                  // Accent stripe marks the row as the user's pick, not a
+                  // ranked entry.
+                  Rectangle {
+                    width: Style.space(3)
+                    height: parent.height - Style.space(12)
+                    radius: width / 2
+                    anchors.left: parent.left
+                    anchors.leftMargin: Style.space(5)
+                    anchors.verticalCenter: parent.verticalCenter
+                    color: Color.accent
+                  }
+                  Row {
+                    anchors.left: parent.left
+                    anchors.right: parent.right
+                    anchors.leftMargin: Style.space(12)
+                    anchors.rightMargin: Style.space(10)
+                    anchors.verticalCenter: parent.verticalCenter
+                    spacing: Style.space(8)
+                    Text {
+                      text: (root.pinnedStation && root.currentStation
+                             && root.currentStation.uuid === root.pinnedStation.uuid
+                             && root.playing) ? "▶" : "♫"
+                      width: Style.space(16)
+                      color: Color.accent
+                      font.family: root.fontFamily
+                      font.pixelSize: Style.font.body
+                    }
+                    Column {
+                      width: parent.width - Style.space(16) - Style.space(8)
+                      spacing: 1
+                      Text {
+                        textFormat: Text.PlainText
+                        width: parent.width
+                        text: root.pinnedStation ? root.pinnedStation.name : ""
+                        color: root.fg
+                        font.family: root.fontFamily
+                        font.pixelSize: Style.font.body
+                        elide: Text.ElideRight
+                      }
+                      Text {
+                        textFormat: Text.PlainText
+                        width: parent.width
+                        text: {
+                          var st = root.pinnedStation;
+                          if (!st) return "";
+                          var meta = Model.streamMeta(st);
+                          var where = Model.stationLabel(st);
+                          return "YOUR PICK · " + where + (meta !== "" ? " · " + meta : "");
+                        }
+                        color: Util.alpha(root.fg, 0.55)
+                        font.family: root.fontFamily
+                        font.pixelSize: Style.font.caption
+                        elide: Text.ElideRight
+                      }
+                    }
+                  }
+                  MouseArea {
+                    anchors.fill: parent
+                    hoverEnabled: true
+                    cursorShape: Qt.PointingHandCursor
+                    onClicked: {
+                      if (root.pinnedStation) root.playStationFromList(root.pinnedStation);
+                    }
+                  }
+                }
+
                 Flickable {
-                  anchors.fill: parent
+                  id: stationFlick
+                  anchors.left: parent.left
+                  anchors.right: parent.right
+                  anchors.bottom: parent.bottom
+                  anchors.top: pinRow.visible ? pinRow.bottom : parent.top
                   anchors.margins: Style.space(4)
                   contentWidth: width
                   contentHeight: stationCol.implicitHeight
@@ -811,7 +1171,7 @@ Panel {
                     id: stationCol
                     width: parent.width
                     Repeater {
-                      model: root.stations
+                      model: root.displayStations
                       Rectangle {
                         required property var modelData
                         width: stationCol.width
@@ -852,7 +1212,15 @@ Panel {
                             Text {
                               textFormat: Text.PlainText
                               width: parent.width
-                              text: (modelData.state ? modelData.state + " · " : "") + Model.streamMeta(modelData)
+                              text: {
+                                var meta = Model.streamMeta(modelData);
+                                if (root.searching) {
+                                  // Worldwide results: show where the station lives.
+                                  var loc = Model.stationLabel(modelData);
+                                  return meta !== "" ? loc + " · " + meta : loc;
+                                }
+                                return (modelData.state ? modelData.state + " · " : "") + meta;
+                              }
                               color: Util.alpha(root.fg, 0.55)
                               font.family: root.fontFamily
                               font.pixelSize: Style.font.caption
@@ -866,9 +1234,12 @@ Panel {
                           hoverEnabled: true
                           cursorShape: Qt.PointingHandCursor
                           onContainsMouseChanged: {
-                            if (containsMouse) root.previewStation(modelData);
+                            // Search results re-sort under a still cursor, so
+                            // during a live search rows only highlight.
+                            if (containsMouse && root.hoverCommits)
+                              root.previewStation(modelData);
                           }
-                          onClicked: root.playStation(modelData)
+                          onClicked: root.playStationFromList(modelData)
                         }
                       }
                     }
@@ -885,6 +1256,7 @@ Panel {
             spacing: Style.space(10)
 
             Button {
+              id: playButton
               text: root.playing ? "⏹" : "▶"
               fontSize: Style.font.title
               bordered: true
@@ -897,7 +1269,13 @@ Panel {
               }
             }
             Column {
-              width: parent.width - Style.space(44) * 3 - Style.space(120) - 40
+              // Size against the row's fixed-width siblings instead of a
+              // guessed button width: the garden button carries text and is
+              // wider than an icon button, which used to push it past the
+              // clipped right edge of the panel.
+              width: Math.max(Style.space(80),
+                              parent.width - playButton.implicitWidth - muteButton.implicitWidth
+                              - volSlider.width - gardenButton.implicitWidth - Style.space(10) * 4)
               anchors.verticalCenter: parent.verticalCenter
               spacing: 2
               Text {
@@ -921,6 +1299,7 @@ Panel {
               }
             }
             Button {
+              id: muteButton
               text: root.muted ? "󰝟" : "󰕾"
               fontSize: Style.font.title
               bordered: false
@@ -943,6 +1322,7 @@ Panel {
               }
             }
             Button {
+              id: gardenButton
               text: "garden ↗"
               fontSize: Style.font.caption
               bordered: true

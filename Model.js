@@ -167,6 +167,14 @@ function stationsByCountryUrl(base, countryName, limit) {
     + "?order=clickcount&reverse=true&limit=" + (limit || 30) + "&hidebroken=true";
 }
 
+// Worldwide station name search: substring matches (nameExact=false)
+// across every country, ranked by clicks.
+function stationsSearchUrl(base, query, limit) {
+  return base + "/json/stations/search?name=" + encodeURIComponent(query)
+    + "&nameExact=false&order=clickcount&reverse=true&limit=" + (limit || 100)
+    + "&hidebroken=true";
+}
+
 function topStationsUrl(base, limit) {
   return base + "/json/stations/topclick/" + (limit || 150);
 }
