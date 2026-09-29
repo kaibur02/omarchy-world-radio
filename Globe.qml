@@ -20,6 +20,11 @@ Item {
   property string selectedIso: ""
   property string playingIso: ""
   property bool spinning: true
+  // When not spinning, the country the globe rests on (playing station,
+  // else the user's own). Re-applied whenever it changes and each time the
+  // popup opens, so a hand-dragged globe comes back to it.
+  property string focusIso: ""
+  property bool shown: true
   property real pulse: 0 // 0..1 heartbeat for the now-playing dot
 
   signal pointHovered(var point)
@@ -47,6 +52,18 @@ Item {
   onPulseChanged: canvas.requestPaint()
   onWidthChanged: { canvas.requestPaint(); bgCanvas.requestPaint(); coastCanvas.requestPaint() }
   onHeightChanged: { canvas.requestPaint(); bgCanvas.requestPaint(); coastCanvas.requestPaint() }
+
+  onFocusIsoChanged: recenter()
+  onShownChanged: if (shown) recenter()
+  onSpinningChanged: recenter()
+  Component.onCompleted: recenter()
+
+  function recenter() {
+    if (spinning || focusIso === "") return;
+    var ll = Model.coordFor(focusIso);
+    centerLon = ll[1];
+    centerLat = ll[0];
+  }
 
   function pointAt(px, py) {
     var r = globeRadius();
@@ -304,8 +321,9 @@ Item {
     }
   }
 
-  // Gentle auto-spin + playing pulse. Pauses while the pointer is down
-  // or resting on the globe so hover-to-play never fights the motion.
+  // Gentle auto-spin (the `autospin` setting) + playing pulse. Spin
+  // pauses while the pointer is down or resting on the globe so
+  // hover-to-play never fights the motion.
   Timer {
     interval: 50
     running: root.visible && root.spinning && !globeMouse.pressed && !globeMouse.containsMouse
@@ -317,7 +335,7 @@ Item {
   }
   Timer {
     interval: 60
-    running: root.visible
+    running: root.visible && root.shown && root.playingIso !== ""
     repeat: true
     onTriggered: root.pulse = (root.pulse + 0.025) % 1.0
   }

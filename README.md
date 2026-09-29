@@ -30,7 +30,12 @@ Press Escape to close it.
 ```sh
 omarchy bar move io.github.kaibur02.omarchy-world-radio --after omarchy.weather
 omarchy bar set io.github.kaibur02.omarchy-world-radio hoverPlay false
+omarchy bar set io.github.kaibur02.omarchy-world-radio autospin false --json
 ```
+
+With `autospin` off the globe stays still, resting on the country that is
+playing, or else on your own country (read from the system timezone). This
+also keeps the shell idle while the popup is open.
 
 ## Remove
 
