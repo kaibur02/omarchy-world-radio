@@ -42,6 +42,8 @@ omarchy plugin remove io.github.kaibur02.omarchy-world-radio
 
 - Station directory and streams via
   [radio-browser.info](https://www.radio-browser.info) (no API key needed).
+- Coastlines from [Natural Earth](https://www.naturalearthdata.com)
+  1:110m land (public domain), bundled in `Land.js`.
 - Fully theme-reactive: every color comes from Omarchy's `Color`/`Style`
   singletons, so theme switches restyle the plugin live.
 - No install hooks, no sudo, no background services. Runs entirely
@@ -56,6 +58,7 @@ omarchy plugin remove io.github.kaibur02.omarchy-world-radio
 | `Widget.qml`    | Bar widget + globe popup      |
 | `Globe.qml`     | Canvas orthographic globe     |
 | `Model.js`      | Country coordinates + API helpers |
+| `Land.js`       | Coastline outlines (Natural Earth) |
 | `preview.png`   | Marketplace preview screenshot |
 
 ## IPC
