@@ -1,6 +1,7 @@
 import QtQuick
 import qs.Commons
 import "Model.js" as Model
+import "Land.js" as Land
 
 // Spinning orthographic globe rendered on a Canvas.
 //
@@ -19,6 +20,11 @@ Item {
   property string selectedIso: ""
   property string playingIso: ""
   property bool spinning: true
+  // When not spinning, the country the globe rests on (playing station,
+  // else the user's own). Re-applied whenever it changes and each time the
+  // popup opens, so a hand-dragged globe comes back to it.
+  property string focusIso: ""
+  property bool shown: true
   property real pulse: 0 // 0..1 heartbeat for the now-playing dot
 
   signal pointHovered(var point)
@@ -32,20 +38,32 @@ Item {
   readonly property color _accent: Color.accent
   readonly property color _popBg: Color.popups.background
   readonly property color _popBorder: Color.popups.border
-  on_FgChanged: canvas.requestPaint()
+  on_FgChanged: { canvas.requestPaint(); bgCanvas.requestPaint(); coastCanvas.requestPaint() }
   on_BgChanged: canvas.requestPaint()
-  on_AccentChanged: canvas.requestPaint()
-  on_PopBgChanged: canvas.requestPaint()
-  on_PopBorderChanged: canvas.requestPaint()
+  on_AccentChanged: { canvas.requestPaint(); bgCanvas.requestPaint() }
+  on_PopBgChanged: { canvas.requestPaint(); bgCanvas.requestPaint() }
+  on_PopBorderChanged: { canvas.requestPaint(); bgCanvas.requestPaint() }
   onPointsChanged: canvas.requestPaint()
   onHoveredIsoChanged: canvas.requestPaint()
   onSelectedIsoChanged: canvas.requestPaint()
   onPlayingIsoChanged: canvas.requestPaint()
-  onCenterLonChanged: canvas.requestPaint()
-  onCenterLatChanged: canvas.requestPaint()
+  onCenterLonChanged: { canvas.requestPaint(); bgCanvas.requestPaint(); coastCanvas.requestPaint() }
+  onCenterLatChanged: { canvas.requestPaint(); bgCanvas.requestPaint(); coastCanvas.requestPaint() }
   onPulseChanged: canvas.requestPaint()
-  onWidthChanged: canvas.requestPaint()
-  onHeightChanged: canvas.requestPaint()
+  onWidthChanged: { canvas.requestPaint(); bgCanvas.requestPaint(); coastCanvas.requestPaint() }
+  onHeightChanged: { canvas.requestPaint(); bgCanvas.requestPaint(); coastCanvas.requestPaint() }
+
+  onFocusIsoChanged: recenter()
+  onShownChanged: if (shown) recenter()
+  onSpinningChanged: recenter()
+  Component.onCompleted: recenter()
+
+  function recenter() {
+    if (spinning || focusIso === "") return;
+    var ll = Model.coordFor(focusIso);
+    centerLon = ll[1];
+    centerLat = ll[0];
+  }
 
   function pointAt(px, py) {
     var r = globeRadius();
@@ -77,17 +95,17 @@ Item {
     return hovered ? r + 2 : r;
   }
 
+  // Ocean sphere and graticule, below the coastlines. The dots and the
+  // hover chip stay on `canvas`, above them, so the pulse only repaints those.
   Canvas {
-    id: canvas
+    id: bgCanvas
     anchors.fill: parent
     renderTarget: Canvas.FramebufferObject
     antialiasing: true
 
     onPaint: {
       var ctx = getContext("2d");
-      var w = width, h = height;
-      ctx.clearRect(0, 0, w, h);
-
+      ctx.clearRect(0, 0, width, height);
       var fg = root._fg, accent = root._accent;
       var popBg = root._popBg, popBorder = root._popBorder;
       var c = root.globeCenter();
@@ -151,6 +169,80 @@ Item {
         }
         ctx.stroke();
       }
+
+      ctx.restore();
+    }
+  }
+
+  // Coastlines on their own canvas: repainted only when the globe turns,
+  // resizes or the theme changes, not on every pulse/hover frame. Raster
+  // (Image) target because it strokes thousands of segments far cheaper.
+  Canvas {
+    id: coastCanvas
+    anchors.fill: parent
+    z: 1
+    renderTarget: Canvas.Image
+    antialiasing: true
+
+    onPaint: {
+      var ctx = getContext("2d");
+      ctx.clearRect(0, 0, width, height);
+      var fg = root._fg;
+      var c = root.globeCenter();
+      var r = root.globeRadius();
+      var i, k, started;
+      ctx.save();
+      ctx.beginPath();
+      ctx.arc(c.x, c.y, r, 0, Math.PI * 2);
+      ctx.clip();
+      ctx.strokeStyle = Qt.rgba(fg.r, fg.g, fg.b, 0.45).toString();
+      ctx.lineWidth = 1.2;
+      ctx.lineJoin = "round";
+      // Same orthographic projection as Model.project, but on precomputed
+      // unit vectors so thousands of points cost no trig per frame.
+      var cLo = root.centerLon * Math.PI / 180, cLa = root.centerLat * Math.PI / 180;
+      var cosCLo = Math.cos(cLo), sinCLo = Math.sin(cLo);
+      var cosCLa = Math.cos(cLa), sinCLa = Math.sin(cLa);
+      ctx.beginPath();
+      for (i = 0; i < Land.unit.length; i++) {
+        var u = Land.unit[i];
+        started = false;
+        for (k = 0; k < u.length; k += 3) {
+          var q = u[k] * cosCLo + u[k + 1] * sinCLo;
+          if (sinCLa * u[k + 2] + cosCLa * q <= 0.02) { started = false; continue; }
+          var lx = c.x + r * (u[k + 1] * cosCLo - u[k] * sinCLo);
+          var ly = c.y - r * (cosCLa * u[k + 2] - sinCLa * q);
+          if (!started) { ctx.moveTo(lx, ly); started = true; }
+          else ctx.lineTo(lx, ly);
+        }
+      }
+      ctx.stroke();
+      ctx.restore();
+    }
+  }
+
+  Canvas {
+    id: canvas
+    anchors.fill: parent
+    z: 2
+    renderTarget: Canvas.FramebufferObject
+    antialiasing: true
+
+    onPaint: {
+      var ctx = getContext("2d");
+      var w = width, h = height;
+      ctx.clearRect(0, 0, w, h);
+
+      var fg = root._fg, accent = root._accent;
+      var popBg = root._popBg, popBorder = root._popBorder;
+      var c = root.globeCenter();
+      var r = root.globeRadius();
+
+      ctx.save();
+      ctx.beginPath();
+      ctx.arc(c.x, c.y, r, 0, Math.PI * 2);
+      ctx.clip();
+      var i, k, p, pr;
 
       // ---- Country dots ----
       for (i = 0; i < root.points.length; i++) {
@@ -229,8 +321,9 @@ Item {
     }
   }
 
-  // Gentle auto-spin + playing pulse. Pauses while the pointer is down
-  // or resting on the globe so hover-to-play never fights the motion.
+  // Gentle auto-spin (the `autospin` setting) + playing pulse. Spin
+  // pauses while the pointer is down or resting on the globe so
+  // hover-to-play never fights the motion.
   Timer {
     interval: 50
     running: root.visible && root.spinning && !globeMouse.pressed && !globeMouse.containsMouse
@@ -242,7 +335,7 @@ Item {
   }
   Timer {
     interval: 60
-    running: root.visible
+    running: root.visible && root.shown && root.playingIso !== ""
     repeat: true
     onTriggered: root.pulse = (root.pulse + 0.025) % 1.0
   }

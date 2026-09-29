@@ -20,7 +20,8 @@
     "defaultSection": "center",
     "defaults": {
       "hoverPlay": true,
-      "volume": 0.8
+      "volume": 0.8,
+      "autospin": true
     }
   }
 }

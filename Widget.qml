@@ -38,6 +38,7 @@ Panel {
   property bool loadingStations: false
   property string searchText: ""
   property bool hoverPlay: setting("hoverPlay", true) === true || String(setting("hoverPlay", true)) === "true"
+  property bool autospin: setting("autospin", true) === true || String(setting("autospin", true)) === "true"
   property real volume: {
     var v = Number(setting("volume", 0.8));
     return isFinite(v) ? Math.max(0, Math.min(1, v)) : 0.8;
@@ -46,6 +47,8 @@ Panel {
   property string pendingIso: ""
   property var pendingStation: null
   property bool _persistGuard: false
+  // ISO code of the user's country, from the system timezone.
+  property string homeIso: ""
 
   readonly property color fg: bar ? bar.foreground : Color.foreground
   readonly property string fontFamily: bar ? bar.fontFamily : Style.font.family
@@ -443,7 +446,21 @@ Panel {
     hoverTimer.restart();
   }
 
-  Component.onCompleted: ensureData()
+  Component.onCompleted: { ensureData(); homeProc.running = true; }
+
+  // Timezone -> country (Europe/Madrid -> ES) via the tz database, so the
+  // globe can rest on the user's country without a network lookup.
+  Process {
+    id: homeProc
+    command: ["sh", "-c", "tz=$(timedatectl show -p Timezone --value 2>/dev/null); [ -n \"$tz\" ] || tz=$(readlink /etc/localtime | sed 's#.*/zoneinfo/##'); awk -v tz=\"$tz\" '$3 == tz { print substr($1, 1, 2); exit }' /usr/share/zoneinfo/zone1970.tab"]
+    stdout: StdioCollector {
+      waitForEnd: true
+      onStreamFinished: {
+        var iso = String(text || "").trim().toUpperCase();
+        if (/^[A-Z]{2}$/.test(iso)) root.homeIso = iso;
+      }
+    }
+  }
   onOpenedChanged: if (opened) ensureData()
 
   // ------------------------------- bar button -------------------------------
@@ -636,6 +653,9 @@ Panel {
                 points: root.globePoints
                 selectedIso: root.selectedIso
                 playingIso: root.playingIso
+                focusIso: root.playingIso !== "" ? root.playingIso : root.homeIso
+                shown: root.opened
+                spinning: root.autospin
                 onPointHovered: function (p) { if (root.hoverPlay) root.previewCountry(p.iso, p.name); }
                 onPointSelected: function (p) { root.selectCountry(p.iso, p.name, true); }
               }
